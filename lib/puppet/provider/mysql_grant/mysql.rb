@@ -8,6 +8,7 @@ Puppet::Type.type(:mysql_grant).provide(:mysql, parent: Puppet::Provider::Mysql)
 
   def self.instances
     instance_configs = {}
+    dynamic_privileges = nil
     users.map do |user|
       user_string = cmd_user(user)
       query = "SHOW GRANTS FOR #{user_string};"
@@ -69,41 +70,13 @@ Puppet::Type.type(:mysql_grant).provide(:mysql, parent: Puppet::Provider::Mysql)
                                'RELOAD', 'REPLICATION CLIENT', 'REPLICATION SLAVE', 'SELECT', 'SHOW DATABASES', 'SHOW VIEW', 'SHUTDOWN', 'SUPER', 'TRIGGER',
                                'UPDATE']
 
-        # ndbcluster has its own set for ALL
-        mysqlcluster_v8_privileges = ['ALL', 'APPLICATION_PASSWORD_ADMIN', 'AUDIT_ABORT_EXEMPT', 'AUDIT_ADMIN', 'AUTHENTICATION_POLICY_ADMIN', 'BACKUP_ADMIN', 'BINLOG_ADMIN',
-                                      'BINLOG_ENCRYPTION_ADMIN', 'CLONE_ADMIN', 'CONNECTION_ADMIN', 'ENCRYPTION_KEY_ADMIN', 'FIREWALL_EXEMPT', 'FLUSH_OPTIMIZER_COSTS', 'FLUSH_STATUS', 'FLUSH_TABLES',
-                                      'FLUSH_USER_RESOURCES', 'GROUP_REPLICATION_ADMIN', 'GROUP_REPLICATION_STREAM', 'INNODB_REDO_LOG_ARCHIVE', 'INNODB_REDO_LOG_ENABLE', 'NDB_STORED_USER',
-                                      'PASSWORDLESS_USER_ADMIN', 'PERSIST_RO_VARIABLES_ADMIN', 'REPLICATION_APPLIER', 'REPLICATION_SLAVE_ADMIN', 'RESOURCE_GROUP_ADMIN', 'RESOURCE_GROUP_USER',
-                                      'ROLE_ADMIN', 'SENSITIVE_VARIABLES_OBSERVER', 'SERVICE_CONNECTION_ADMIN', 'SESSION_VARIABLES_ADMIN', 'SET_USER_ID', 'SHOW_ROUTINE', 'SYSTEM_USER',
-                                      'SYSTEM_VARIABLES_ADMIN', 'TABLE_ENCRYPTION_ADMIN', 'XA_RECOVER_ADMIN']
-
-        # The following two compare blocks are a workaround for issue #1474.
-        mysql_pre_v8_privileges_one = ['ALL', 'APPLICATION_PASSWORD_ADMIN', 'AUDIT_ABORT_EXEMPT', 'AUDIT_ADMIN', 'AUTHENTICATION_POLICY_ADMIN', 'BACKUP_ADMIN', 'BINLOG_ADMIN',
-                                       'BINLOG_ENCRYPTION_ADMIN', 'CLONE_ADMIN', 'CONNECTION_ADMIN', 'ENCRYPTION_KEY_ADMIN', 'FLUSH_OPTIMIZER_COSTS', 'FLUSH_STATUS',
-                                       'FLUSH_TABLES', 'FLUSH_USER_RESOURCES', 'GROUP_REPLICATION_ADMIN', 'GROUP_REPLICATION_STREAM', 'INNODB_REDO_LOG_ARCHIVE',
-                                       'INNODB_REDO_LOG_ENABLE', 'PASSWORDLESS_USER_ADMIN', 'PERSIST_RO_VARIABLES_ADMIN', 'REPLICATION_APPLIER', 'REPLICATION_SLAVE_ADMIN',
-                                       'RESOURCE_GROUP_ADMIN', 'RESOURCE_GROUP_USER', 'ROLE_ADMIN', 'SERVICE_CONNECTION_ADMIN', 'SESSION_VARIABLES_ADMIN', 'SET_USER_ID',
-                                       'SHOW_ROUTINE', 'SYSTEM_USER', 'SYSTEM_VARIABLES_ADMIN', 'TABLE_ENCRYPTION_ADMIN', 'XA_RECOVER_ADMIN']
-        mysql_pre_v8_privileges_two = ['ALL', 'APPLICATION_PASSWORD_ADMIN', 'AUDIT_ABORT_EXEMPT', 'AUDIT_ADMIN', 'AUTHENTICATION_POLICY_ADMIN', 'BACKUP_ADMIN', 'BINLOG_ADMIN',
-                                       'BINLOG_ENCRYPTION_ADMIN', 'CLONE_ADMIN', 'CONNECTION_ADMIN', 'ENCRYPTION_KEY_ADMIN', 'FLUSH_OPTIMIZER_COSTS', 'FLUSH_STATUS',
-                                       'FLUSH_TABLES', 'FLUSH_USER_RESOURCES', 'GROUP_REPLICATION_ADMIN', 'GROUP_REPLICATION_STREAM', 'INNODB_REDO_LOG_ARCHIVE',
-                                       'INNODB_REDO_LOG_ENABLE', 'PASSWORDLESS_USER_ADMIN', 'PERSIST_RO_VARIABLES_ADMIN', 'REPLICATION_APPLIER', 'REPLICATION_SLAVE_ADMIN',
-                                       'RESOURCE_GROUP_ADMIN', 'RESOURCE_GROUP_USER', 'ROLE_ADMIN', 'SENSITIVE_VARIABLES_OBSERVER', 'SERVICE_CONNECTION_ADMIN',
-                                       'SESSION_VARIABLES_ADMIN', 'SET_USER_ID', 'SHOW_ROUTINE', 'SYSTEM_USER', 'SYSTEM_VARIABLES_ADMIN', 'TABLE_ENCRYPTION_ADMIN', 'XA_RECOVER_ADMIN']
-
-        mysql_pre_v8_privileges_three = ['ALL', 'APPLICATION_PASSWORD_ADMIN', 'AUDIT_ABORT_EXEMPT', 'AUDIT_ADMIN', 'AUTHENTICATION_POLICY_ADMIN', 'BACKUP_ADMIN', 'BINLOG_ADMIN',
-                                         'BINLOG_ENCRYPTION_ADMIN', 'CLONE_ADMIN', 'CONNECTION_ADMIN', 'ENCRYPTION_KEY_ADMIN', 'FIREWALL_EXEMPT', 'FLUSH_OPTIMIZER_COSTS', 'FLUSH_STATUS',
-                                         'FLUSH_TABLES', 'FLUSH_USER_RESOURCES', 'GROUP_REPLICATION_ADMIN', 'GROUP_REPLICATION_STREAM', 'INNODB_REDO_LOG_ARCHIVE',
-                                         'INNODB_REDO_LOG_ENABLE', 'PASSWORDLESS_USER_ADMIN', 'PERSIST_RO_VARIABLES_ADMIN', 'REPLICATION_APPLIER', 'REPLICATION_SLAVE_ADMIN',
-                                         'RESOURCE_GROUP_ADMIN', 'RESOURCE_GROUP_USER', 'ROLE_ADMIN', 'SENSITIVE_VARIABLES_OBSERVER', 'SERVICE_CONNECTION_ADMIN',
-                                         'SESSION_VARIABLES_ADMIN', 'SET_USER_ID', 'SHOW_ROUTINE', 'SYSTEM_USER', 'SYSTEM_VARIABLES_ADMIN', 'TABLE_ENCRYPTION_ADMIN', 'TELEMETRY_LOG_ADMIN',
-                                         'XA_RECOVER_ADMIN']
-
-        # rubocop:disable Layout/LineLength
-        if (newer_than('mysql' => '8.0.0') && (sorted_privileges == mysql_v8_privileges || sorted_privileges == mysqlcluster_v8_privileges)) || sorted_privileges == mysql_pre_v8_privileges_one || sorted_privileges == mysql_pre_v8_privileges_two || sorted_privileges == mysql_pre_v8_privileges_three
+        if newer_than('mysql' => '8.0.0') && sorted_privileges == mysql_v8_privileges
           sorted_privileges = ['ALL']
+        elsif sorted_privileges.size > 1 && sorted_privileges.include?('ALL')
+          # MySQL 8 reads a global ALL back as ALL plus each dynamic privilege.
+          dynamic_privileges ||= registered_dynamic_privileges
+          sorted_privileges = ['ALL'] if sorted_privileges - ['ALL'] == dynamic_privileges
         end
-        # rubocop:enable Layout/LineLength
 
         instance_configs[name] = {
           privileges: sorted_privileges,
@@ -125,6 +98,11 @@ Puppet::Type.type(:mysql_grant).provide(:mysql, parent: Puppet::Provider::Mysql)
       )
     end
     instances
+  end
+
+  # Dynamic privileges are the upper-case names; static ones are capitalised words.
+  def self.registered_dynamic_privileges
+    mysql_caller('SHOW PRIVILEGES', 'regular').each_line.map { |line| line.split("\t").first }.grep(%r{\A[A-Z0-9_]+\z}).sort
   end
 
   def self.prefetch(resources)
