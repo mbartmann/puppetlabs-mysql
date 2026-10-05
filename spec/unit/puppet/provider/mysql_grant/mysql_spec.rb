@@ -15,7 +15,7 @@ describe Puppet::Type.type(:mysql_grant).provider(:mysql) do
      'TELEMETRY_LOG_ADMIN', 'XA_RECOVER_ADMIN']
   end
   let(:mysql84_dynamic) do
-    mysql80_dynamic + ['ALLOW_NONEXISTENT_DEFINER', 'FLUSH_PRIVILEGES', 'OPTIMIZE_LOCAL_TABLE', 'SET_ANY_DEFINER', 'TRANSACTION_GTID_TAG']
+    (mysql80_dynamic - ['SET_USER_ID']) + ['ALLOW_NONEXISTENT_DEFINER', 'FLUSH_PRIVILEGES', 'OPTIMIZE_LOCAL_TABLE', 'SET_ANY_DEFINER', 'TRANSACTION_GTID_TAG']
   end
 
   def privileges_read_back(held:, registered:, table: '*.*')
@@ -48,9 +48,10 @@ describe Puppet::Type.type(:mysql_grant).provider(:mysql) do
       expect(privileges.size).to eq(36)
     end
 
-    it 'does not collapse ALL missing dynamic privileges the server registered later' do
+    it 'does not collapse ALL lacking several privileges the server registers' do
       allow(described_class).to receive(:mysqld_version_string).and_return('8.4.6')
-      expect(privileges_read_back(held: mysql80_dynamic, registered: mysql84_dynamic).size).to eq(37)
+      held = mysql84_dynamic - ['FLUSH_PRIVILEGES', 'OPTIMIZE_LOCAL_TABLE', 'TRANSACTION_GTID_TAG']
+      expect(privileges_read_back(held: held, registered: mysql84_dynamic).size).to eq(38)
     end
 
     it 'reads a database-level ALL back as ALL' do
